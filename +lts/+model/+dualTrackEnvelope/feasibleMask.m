@@ -1,0 +1,154 @@
+function feasible = feasibleMask(vehicle, speed_mps, longitudinalAcceleration_mps2, lateralAcceleration_mps2)
+%FEASIBLEMASK Allocation-free numerical path for repeated boundary searches.
+% calculateState is the readable diagnostic reference. A regression test
+% requires this optimized implementation to return the same feasibility.
+
+if vehicle.controls.targetYawMoment_Nm ~= 0
+    state = lts.model.dualTrackEnvelope.calculateState(vehicle, speed_mps, ...
+        longitudinalAcceleration_mps2, lateralAcceleration_mps2);
+    feasible = state.feasible;
+    return
+end
+
+mass_kg = vehicle.mass.total_kg;
+frontFraction = vehicle.geometry.frontMassFraction;
+rearFraction = 1 - frontFraction;
+aerodynamics = vehicle.aerodynamics;
+dynamicPressure_Pa = 0.5 * aerodynamics.airDensity_kgpm3 .* speed_mps .^ 2;
+drag_N = dynamicPressure_Pa * aerodynamics.referenceArea_m2 ...
+    * aerodynamics.dragCoefficient;
+frontDownforce_N = -dynamicPressure_Pa * aerodynamics.referenceArea_m2 ...
+    * aerodynamics.liftCoefficientFront;
+rearDownforce_N = -dynamicPressure_Pa * aerodynamics.referenceArea_m2 ...
+    * aerodynamics.liftCoefficientRear;
+
+longitudinalTransfer_N = (mass_kg .* longitudinalAcceleration_mps2 ...
+    .* vehicle.geometry.cgHeight_m + drag_N ...
+    .* aerodynamics.dragApplicationHeight_m) / vehicle.geometry.wheelbase_m;
+frontAxleLoad_N = mass_kg * 9.81 * frontFraction ...
+    + frontDownforce_N - longitudinalTransfer_N;
+rearAxleLoad_N = mass_kg * 9.81 * rearFraction ...
+    + rearDownforce_N + longitudinalTransfer_N;
+rollMoment_Nm = mass_kg .* lateralAcceleration_mps2 ...
+    .* vehicle.geometry.cgHeight_m;
+if isfield(vehicle, 'modelOptions') ...
+        && isfield(vehicle.modelOptions, 'lateralLoadTransferScale')
+    rollMoment_Nm = rollMoment_Nm ...
+        .* vehicle.modelOptions.lateralLoadTransferScale;
+end
+frontTransfer_N = rollMoment_Nm ...
+    .* vehicle.suspension.frontRollMomentFraction ...
+    / vehicle.geometry.frontTrack_m;
+rearTransfer_N = rollMoment_Nm ...
+    .* (1 - vehicle.suspension.frontRollMomentFraction) ...
+    / vehicle.geometry.rearTrack_m;
+normalLoads_N = [frontAxleLoad_N / 2 - frontTransfer_N, ...
+    frontAxleLoad_N / 2 + frontTransfer_N, ...
+    rearAxleLoad_N / 2 - rearTransfer_N, ...
+    rearAxleLoad_N / 2 + rearTransfer_N];
+
+tire = vehicle.tireEnvelope;
+capacities_N = zeros(size(normalLoads_N));
+loaded = normalLoads_N > 0;
+loadRatio = normalLoads_N(loaded) / tire.referenceNormalLoad_N;
+capacities_N(loaded) = tire.frictionCoefficientAtReferenceLoad ...
+    .* loadRatio .^ tire.loadSensitivityExponent .* normalLoads_N(loaded);
+frontCapacitySum_N = capacities_N(:, 1) + capacities_N(:, 2);
+rearCapacitySum_N = capacities_N(:, 3) + capacities_N(:, 4);
+frontWeights = capacities_N(:, 1:2) ./ frontCapacitySum_N;
+rearWeights = capacities_N(:, 3:4) ./ rearCapacitySum_N;
+frontLateralForce_N = mass_kg .* lateralAcceleration_mps2 * frontFraction;
+rearLateralForce_N = mass_kg .* lateralAcceleration_mps2 * rearFraction;
+lateralForces_N = [frontWeights .* frontLateralForce_N, ...
+    rearWeights .* rearLateralForce_N];
+
+requiredTireForce_N = mass_kg .* longitudinalAcceleration_mps2 + drag_N;
+frontForceFraction = vehicle.powertrain.frontDriveForceFraction ...
+    * ones(size(requiredTireForce_N));
+braking = longitudinalAcceleration_mps2 < 0;
+frontForceFraction(braking) = vehicle.brakes.frontForceFraction;
+frontLongitudinalForce_N = requiredTireForce_N .* frontForceFraction;
+rearLongitudinalForce_N = requiredTireForce_N .* (1 - frontForceFraction);
+longitudinalForces_N = [frontLongitudinalForce_N / 2, ...
+    frontLongitudinalForce_N / 2, rearLongitudinalForce_N / 2, ...
+    rearLongitudinalForce_N / 2];
+exponent = tire.combinedForceExponent;
+utilization = ((abs(longitudinalForces_N) ./ capacities_N) .^ exponent ...
+    + (abs(lateralForces_N) ./ capacities_N) .^ exponent) ...
+    .^ (1 / exponent);
+tireAndAllocationFeasible = all(utilization <= 1 + 1e-12, 2);
+
+remainingLongitudinalCapacity_N = capacities_N .* max(0, ...
+    1 - (abs(lateralForces_N) ./ max(capacities_N, eps)) .^ exponent) ...
+    .^ (1 / exponent);
+driving = requiredTireForce_N >= 0;
+if strcmp(vehicle.controls.driveAllocation.mode, 'ideal') && any(driving)
+    driveCapacities_N = applyDriveActuatorLimits(vehicle, speed_mps, ...
+        remainingLongitudinalCapacity_N);
+    maximumIdealDriveForce_N = maximumZeroYawForce(vehicle, ...
+        driveCapacities_N);
+    tireAndAllocationFeasible(driving) = requiredTireForce_N(driving) ...
+        <= maximumIdealDriveForce_N(driving) + 1e-9;
+end
+brakingRows = ~driving;
+if strcmp(vehicle.controls.brakeAllocation.mode, 'ideal') && any(brakingRows)
+    maximumIdealBrakeForce_N = maximumZeroYawForce(vehicle, ...
+        remainingLongitudinalCapacity_N);
+    tireAndAllocationFeasible(brakingRows) = -requiredTireForce_N(brakingRows) ...
+        <= maximumIdealBrakeForce_N(brakingRows) + 1e-9;
+end
+
+drive = lts.powertrain.maximumDriveForce(vehicle.powertrain, speed_mps);
+availableDriveForce_N = drive.maximumForce_N;
+
+feasible = all(normalLoads_N > 0, 2) & tireAndAllocationFeasible ...
+    & max(requiredTireForce_N, 0) <= availableDriveForce_N + 1e-9;
+end
+
+function limitedCapacities_N = applyDriveActuatorLimits(vehicle, ...
+        speed_mps, capacities_N)
+limitedCapacities_N = capacities_N;
+groups = vehicle.powertrain.wheelActuatorGroups;
+limitedCapacities_N(:, groups == 0) = 0;
+motorTorqueForce_N = vehicle.powertrain.maximumMotorTorque_Nm ...
+    * vehicle.powertrain.gearRatio * vehicle.powertrain.gearboxEfficiency ...
+    / vehicle.powertrain.effectiveTireRadius_m;
+motorPowerForce_N = Inf(size(speed_mps));
+moving = speed_mps > 0;
+motorPowerForce_N(moving) = vehicle.powertrain.maximumMotorPower_W ...
+    * vehicle.powertrain.gearboxEfficiency ./ speed_mps(moving);
+motorForceLimit_N = min(motorTorqueForce_N, motorPowerForce_N);
+activeGroups = unique(groups(groups > 0));
+for groupIndex = 1:numel(activeGroups)
+    members = find(groups == activeGroups(groupIndex));
+    equalWheelLimit_N = min(min(capacities_N(:, members), [], 2), ...
+        motorForceLimit_N / numel(members));
+    limitedCapacities_N(:, members) = repmat(equalWheelLimit_N, ...
+        1, numel(members));
+end
+end
+
+function maximumForce_N = maximumZeroYawForce(vehicle, capacities_N)
+leftLevers_m = [vehicle.geometry.frontTrack_m / 2, ...
+    vehicle.geometry.rearTrack_m / 2];
+rightLevers_m = leftLevers_m;
+leftCapacities_N = capacities_N(:, [1, 3]);
+rightCapacities_N = capacities_N(:, [2, 4]);
+leftMomentCapacity_Nm = sum(leftCapacities_N .* leftLevers_m, 2);
+rightMomentCapacity_Nm = sum(rightCapacities_N .* rightLevers_m, 2);
+balancedMoment_Nm = min(leftMomentCapacity_Nm, rightMomentCapacity_Nm);
+maximumForce_N = sideForceAtMoment(leftLevers_m, leftCapacities_N, ...
+    balancedMoment_Nm) + sideForceAtMoment(rightLevers_m, ...
+    rightCapacities_N, balancedMoment_Nm);
+end
+
+function force_N = sideForceAtMoment(levers_m, capacities_N, moment_Nm)
+[sortedLevers_m, order] = sort(levers_m, 'ascend');
+sortedCapacities_N = capacities_N(:, order);
+firstForce_N = min(sortedCapacities_N(:, 1), ...
+    moment_Nm / sortedLevers_m(1));
+remainingMoment_Nm = moment_Nm - firstForce_N * sortedLevers_m(1);
+secondForce_N = min(sortedCapacities_N(:, 2), ...
+    remainingMoment_Nm / sortedLevers_m(2));
+force_N = firstForce_N + secondForce_N;
+end
