@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Laptime Simulation nextGen V2
 
 V2 ist eine übersichtliche, erweiterbare QSS-Rundenzeitsimulation für
@@ -220,3 +221,6 @@ Paketstruktur in `docs/architecture.md`, der detaillierte Ablauf aller
 Einstiegsskripte in `docs/script-execution-flow.md` und Event-/Punkteberechnungen
 in `docs/events-scoring-sensitivity.md`. Der Abgleich mit der Anforderungsliste
 steht in `docs/requirements-status.md`.
+=======
+# LaptimeSimulation
+
