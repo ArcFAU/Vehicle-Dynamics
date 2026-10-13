@@ -1,5 +1,10 @@
 # Architektur nextGen V2
 
+> Die öffentliche, vereinfachte Schnittstelle ist in
+> `transparent-v2.md` beschrieben. Sie stellt nur `pointMass`, `singleTrack`
+> und `dualTrack` bereit. Die nachfolgend dokumentierten Level und Modell-IDs
+> bleiben interne Rechenkerne und Kompatibilitätsschnittstellen.
+
 ## Ziel
 
 V2 trennt physikalische Modelle, Ausführungsstrategien und Designauswertungen.
@@ -116,3 +121,30 @@ vehicle + track + modelId + strategy
    ohne Endwert wird am Ziel keine künstliche Bremsung erzwungen.
 8. Modell-ID, Strategie, Energie- und Gieroptionen sind explizit; fehlende oder
    widersprüchliche Angaben brechen vor der Simulation ab.
+
+## Bereinigung am 2026-10-13
+
+Die allgemeine Simulation und die FSG-Studien verwenden unmittelbar
+`lts.model.dualTrackEnvelope`; die frühere V8-Hülle wurde entfernt. Die Querlastprüfung bleibt unabhängig von idealer
+Längskraftallokation wirksam. `lts.model.maximumSteadySpeed` löst die
+Geschwindigkeitssuche auch ohne aktive Motordrehzahlgrenze. Antriebs- und
+Bremspeaks im Massepunktmodell werden getrennt ausgewertet.
+
+Aktive Runner, Referenzdaten und Qualitätsprüfungen sind in
+`script-execution-flow.md` dokumentiert. Die aktuellen Referenzdaten sind
+projektlokale Eingaben unter `data`; erzeugte Ergebnisse und Sicherungen sind
+keine Laufzeitquellen der allgemeinen Simulation.
+
+## Gemeinsame Energiearchitektur
+
+`lts.energy.propagateSegment` ist der einzige Energieintegrator.
+`lts.energy.analyzeLap` verwendet ihn für vollständige Strecken, Zeitfenster und
+Wiederholungen. Der gekoppelte Solver ruft denselben Integrator auf. Gemeinsame
+Antriebsgrenzen liegen in `lts.powertrain.driveLimits` und
+`driveDemandFeasible`; ein optionaler drehzahlabhängiger Drehmomentverlauf liegt
+im Motor-Modul. `constant`, `efficiencyMap` und `lossMap` wählen die Motorkonversion.
+Die FSG-Bewertung wendet ihren Rekuperationsfaktor separat an.
+
+Nur `lts.compatibility.normalizeEnergyModel` kennt die alten V13/V14-Datenfelder.
+Der Adapter übersetzt historische Eingaben beim Laden; neue Ergebnisse und
+der aktive Kern verwenden ein gemeinsames Schema.

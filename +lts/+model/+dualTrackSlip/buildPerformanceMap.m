@@ -10,7 +10,7 @@ arguments
     options.maximumAccelerationSearch_mps2 (1, 1) double ...
         {mustBePositive, mustBeFinite} = 5 * 9.81
     options.interpolationSafetyFactor (1, 1) double ...
-        {mustBePositive, mustBeFinite} = 0.80
+        {mustBePositive, mustBeFinite} = 1.0
     options.showProgress (1, 1) logical = true
     options.progressLabel (1, 1) string = "Level 2.1c map"
     options.enableSolverRetries (1, 1) logical = false

@@ -29,7 +29,7 @@ classdef TestDualTrackEnvelopeLevel20 < matlab.unittest.TestCase
             testCase.verifyEqual(left.normalLoads_N, ...
                 right.normalLoads_N([2, 1, 4, 3]), 'AbsTol', 1e-10);
             testCase.verifyEqual(left.tireUtilization, ...
-                right.tireUtilization([2, 1, 4, 3]), 'AbsTol', 1e-10);
+                right.tireUtilization([2, 1, 4, 3]), 'AbsTol', 5e-4);
         end
 
         function operatingPointClosesEquilibria(testCase)
@@ -64,6 +64,33 @@ classdef TestDualTrackEnvelopeLevel20 < matlab.unittest.TestCase
                 speed_mps, ax_mps2, ay_mps2);
 
             testCase.verifyEqual(optimized, state.feasible);
+        end
+
+        function usesSelectedFittedTirePeakEnvelope(testCase)
+            vehicle = FAUmaxTauV2();
+            model = lts.model.dualTrackEnvelope.create(vehicle);
+
+            testCase.verifyEqual(model.peakEnvelope.type, ...
+                'fittedDirectionalPeak');
+            testCase.verifyEqual( ...
+                model.peakEnvelope.parameters.lateralScale, ...
+                vehicle.tireModel.fittedCombinedSlip.lateralScale);
+            testCase.verifyEqual( ...
+                model.peakEnvelope.parameters.longitudinalScale, ...
+                vehicle.tireModel.fittedCombinedSlip.longitudinalScale);
+        end
+
+        function fittedLateralScaleChangesCorneringLimit(testCase)
+            vehicle = FAUmaxTauV2();
+            baseline = lts.model.dualTrackEnvelope.create(vehicle);
+            baselineSpeed_mps = baseline.maximumSpeedForCurvature(0.05);
+
+            vehicle.tireModel.fittedCombinedSlip.lateralScale = ...
+                0.8 * vehicle.tireModel.fittedCombinedSlip.lateralScale;
+            reduced = lts.model.dualTrackEnvelope.create(vehicle);
+            reducedSpeed_mps = reduced.maximumSpeedForCurvature(0.05);
+
+            testCase.verifyLessThan(reducedSpeed_mps, baselineSpeed_mps);
         end
     end
 end

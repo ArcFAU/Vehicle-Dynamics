@@ -22,20 +22,9 @@ model.accelerationLimits = ...
 end
 
 function maximumSpeed_mps = maximumSpeedForCurvature(vehicle, peakEnvelope, curvature_1pm)
-curvatureMagnitude_1pm = abs(curvature_1pm);
-drive = lts.powertrain.maximumDriveForce(vehicle.powertrain, 0);
-upperSpeed_mps = drive.maximumVehicleSpeed_mps * ones(size(curvature_1pm));
-lowerSpeed_mps = zeros(size(curvature_1pm));
-for iteration = 1:28
-    candidateSpeed_mps = (lowerSpeed_mps + upperSpeed_mps) / 2;
-    lateralAcceleration_mps2 = candidateSpeed_mps .^ 2 ...
-        .* curvatureMagnitude_1pm;
-    feasible = steadySpeedFeasible(vehicle, peakEnvelope, candidateSpeed_mps, ...
-        lateralAcceleration_mps2);
-    lowerSpeed_mps(feasible) = candidateSpeed_mps(feasible);
-    upperSpeed_mps(~feasible) = candidateSpeed_mps(~feasible);
-end
-maximumSpeed_mps = lowerSpeed_mps;
+query = @(speed, ay) steadySpeedFeasible(vehicle, peakEnvelope, speed, ay);
+maximumSpeed_mps = lts.model.maximumSteadySpeed( ...
+    vehicle, curvature_1pm, query, 28);
 end
 
 function limits = accelerationLimits(vehicle, peakEnvelope, speed_mps, ...
@@ -59,7 +48,9 @@ else
         normalLoadPerTire_N, lateralForcePerTire_N);
     driveTireCapacity_N = min(4, vehicle.powertrain.drivenWheelCount) ...
         .* longitudinalCapacityPerTire_N;
-    brakeTireCapacity_N = 4 .* longitudinalCapacityPerTire_N;
+    brakeCapacityPerTire_N = lts.tire.directionalLongitudinalCapacity( ...
+        peakEnvelope, normalLoadPerTire_N, lateralForcePerTire_N, 0, "brake");
+    brakeTireCapacity_N = 4 .* brakeCapacityPerTire_N;
 end
 drive = lts.powertrain.maximumDriveForce(vehicle.powertrain, speed_mps);
 availableDriveForce_N = min(driveTireCapacity_N, ...
@@ -123,10 +114,11 @@ frontLoad_N = mass_kg * 9.81 * frontFraction ...
 rearLoad_N = mass_kg * 9.81 * (1 - frontFraction) ...
     + aero.rearDownforce_N + transfer_N;
 lateralPerTire_N = mass_kg .* ay_mps2 / 4;
+if driving, operation = "drive"; else, operation = "brake"; end
 frontCapacityPerTire_N = lts.tire.directionalLongitudinalCapacity( ...
-    peakEnvelope, max(0, frontLoad_N / 2), lateralPerTire_N, 0);
+    peakEnvelope, max(0, frontLoad_N / 2), lateralPerTire_N, 0, operation);
 rearCapacityPerTire_N = lts.tire.directionalLongitudinalCapacity( ...
-    peakEnvelope, max(0, rearLoad_N / 2), lateralPerTire_N, 0);
+    peakEnvelope, max(0, rearLoad_N / 2), lateralPerTire_N, 0, operation);
 if driving
     frontShare = vehicle.powertrain.frontDriveForceFraction;
     if frontShare <= 0

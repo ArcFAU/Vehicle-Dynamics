@@ -14,6 +14,8 @@ assert(isequal(size(camberAngle_rad), size(normalLoad_N)), ...
     'lts:tire:PeakShape', 'Camber and normal load must have equal size.');
 
 switch envelope.type
+    case 'quadraticDirectional'
+        peaks = lts.tire.evaluateDirectionalEnvelope(envelope,normalLoad_N);
     case 'fittedDirectionalPeak'
         fit = envelope.parameters;
         sourceCamber_deg = -rad2deg(camberAngle_rad);
@@ -24,16 +26,22 @@ switch envelope.type
             fit.coefficients(10, :), sourceCamber_deg, sourceNormalLoad_N);
         peaks.lateral_N = abs(lateral_N);
         peaks.longitudinal_N = abs(longitudinal_N);
+        peaks.drive_N = peaks.longitudinal_N;
+        peaks.brake_N = peaks.longitudinal_N;
     case 'loadSensitiveSymmetric'
         force_N = lts.tire.maximumForce(envelope.fallback, normalLoad_N);
         peaks.lateral_N = force_N;
         peaks.longitudinal_N = force_N;
+        peaks.drive_N = force_N;
+        peaks.brake_N = force_N;
     otherwise
         error('lts:tire:PeakEnvelope', ...
             'Unknown peak-envelope type: %s.', envelope.type);
 end
 peaks.lateral_N(normalLoad_N == 0) = 0;
 peaks.longitudinal_N(normalLoad_N == 0) = 0;
+peaks.drive_N(normalLoad_N == 0) = 0;
+peaks.brake_N(normalLoad_N == 0) = 0;
 end
 
 function value = evaluateRow(row, camber, normalLoad)

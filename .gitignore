@@ -6,3 +6,10 @@
 /_backup_before_sensitivity_20260913_01/
 /Anforderungsliste_QSS_Laptime_Simulation_Formula_Student.docx
 
+
+# Generated outputs and local historical/safety copies
+/results/
+/archive/
+/_backup_*/
+*.asv
+*.bak

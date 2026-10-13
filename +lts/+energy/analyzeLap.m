@@ -37,6 +37,8 @@ flow = simulateElectricalFlow(sequence, vehicle);
 energy.status = 'calculated';
 energy.meta.modelLevel = '2.4b';
 energy.meta.efficiencyModel = vehicle.energy.efficiencyModel.mode;
+energy.meta.motorModel = vehicle.energy.motorModel.mode;
+energy.meta.measurementBoundary = vehicle.energy.measurementBoundary;
 energy.meta.repetitions = options.Repetitions;
 energy.meta.aggregation = char(options.Aggregation);
 energy.meta.distanceWindows_m = options.DistanceWindows_m;
@@ -65,6 +67,11 @@ energy.finalSoc = flow.socBoundary(end);
 energy.minimumSoc = min(flow.socBoundary);
 energy.maximumSoc = max(flow.socBoundary);
 energy.installedCapacity_kWh = vehicle.energy.installedCapacity_kWh;
+energy.requiredUsableEnergy_kWh = max([0; cumsum(flow.netBattery_J)]) / 3.6e6;
+energy.motorMapClampedSegmentCount = nnz(flow.motorMapClamped);
+energy.netTerminalEnergy_kWh = sum(flow.terminalBatteryPower_W .* sequence.time_s) / 3.6e6;
+energy.tractionTerminalEnergy_kWh = sum(flow.terminalTraction_J) / 3.6e6;
+energy.recoveredTerminalEnergy_kWh = sum(flow.terminalRecovered_J) / 3.6e6;
 
 if energy.theoreticalRecoverableEnergy_kWh > 0
     energy.regenPotentialUtilization = energy.recoveredEnergy_kWh ...
@@ -81,8 +88,8 @@ else
     energy.recoveredShareOfGrossConsumption = NaN;
 end
 
-energy.peakBatteryDischargePower_kW = max(flow.batteryPower_W) / 1e3;
-energy.peakBatteryChargePower_kW = max(0, -min(flow.batteryPower_W)) / 1e3;
+energy.peakBatteryDischargePower_kW = max(0,max(flow.terminalBatteryPower_W)) / 1e3;
+energy.peakBatteryChargePower_kW = max(0, -min(flow.terminalBatteryPower_W)) / 1e3;
 energy.peakBatteryDischargeCurrent_A = ...
     energy.peakBatteryDischargePower_kW * 1e3 ...
     / vehicle.energy.nominalAccumulatorVoltage_V;
@@ -92,20 +99,23 @@ energy.peakBatteryChargeCurrent_A = ...
 energy.batteryDischargePowerLimit_kW = ...
     vehicle.energy.maximumBatteryDischargePower_W / 1e3;
 energy.batteryDischargePowerUtilization = max( ...
-    flow.batteryPower_W ./ flow.dischargePowerLimit_W);
+    flow.terminalBatteryPower_W ./ max(flow.dischargePowerLimit_W,eps));
 energy.exceedsBatteryDischargePowerLimit = ...
     energy.powerLimitedSegmentCount > 0;
 
 availableCapacityFraction = vehicle.energy.usableSocWindow ...
     * (1 - vehicle.energy.finishEnergyReserveFraction) ...
     * vehicle.energy.endOfLifeCapacityRetention;
-energy.requiredInstalledCapacity_kWh = max(0, energy.netBatteryEnergy_kWh) ...
+energy.requiredInstalledCapacity_kWh = energy.requiredUsableEnergy_kWh ...
     / availableCapacityFraction;
 energy.requiredNominalCapacity_Ah = energy.requiredInstalledCapacity_kWh ...
     * 1e3 / vehicle.energy.nominalAccumulatorVoltage_V;
 energy.estimatedAccumulatorMass_kg = energy.requiredInstalledCapacity_kWh ...
     * 1e3 / vehicle.energy.packSpecificEnergy_Whpkg;
 
+energy.profile = flow;
+energy.profile.segmentLength_m = sequence.length_m;
+energy.profile.segmentTime_s = sequence.time_s;
 energy.profile.eventDistance_m = cumsum(sequence.length_m) ...
     - sequence.length_m / 2;
 energy.profile.sourceSegmentIndex = sequence.sourceIndex;
@@ -122,6 +132,8 @@ energy.profile.driveEfficiency = flow.driveEfficiency;
 energy.profile.regenEfficiency = flow.regenEfficiency;
 energy.profile.soc = flow.socBoundary(1:end-1);
 energy.profile.socBoundary = flow.socBoundary;
+assert(abs(sum(flow.batteryPower_W.*sequence.time_s)/3.6e6-energy.netBatteryEnergy_kWh)<1e-9, ...
+    'lts:energy:EnergyBalance','Integrated power and net energy disagree.');
 end
 
 function flow = simulateElectricalFlow(sequence, vehicle)
@@ -133,7 +145,9 @@ fields = {'tractionMechanical_J', 'brakingMechanical_J', ...
     'potentialRecovered_J', 'frictionBrake_J', 'netBattery_J', ...
     'powerLimitViolation_J', 'capacityShortfall_J', ...
     'batteryPower_W', 'dischargePowerLimit_W', 'chargePowerLimit_W', ...
-    'regenMechanical_J', 'driveEfficiency', 'regenEfficiency'};
+    'regenMechanical_J', 'driveEfficiency', 'regenEfficiency', ...
+    'motorSpeed_rpm','motorTorque_Nm','motorShaftPower_W','motorMapClamped', ...
+    'terminalBatteryPower_W','terminalTraction_J','terminalRecovered_J'};
 for fieldIndex = 1:numel(fields)
     flow.(fields{fieldIndex}) = zeros(count, 1);
 end

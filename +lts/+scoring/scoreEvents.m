@@ -77,7 +77,8 @@ if ~isfield(result, 'energy') ...
     status = 'missing energy result';
     return
 end
-factor_s2kWh = result.time_s ^ 2 * result.energy.netBatteryEnergy_kWh;
+scoringEnergy=lts.scoring.energyForEfficiency(result.energy,rule.reference);
+factor_s2kWh = result.time_s ^ 2 * scoringEnergy;
 minimumFactor = rule.reference.minimumFactor_s2kWh;
 if ~isfinite(minimumFactor) || minimumFactor <= 0
     status = 'missing annual minimum efficiency factor';

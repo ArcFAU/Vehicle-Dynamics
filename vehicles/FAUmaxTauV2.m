@@ -172,6 +172,9 @@ vehicle.energy.socLimitModel.regenPowerScale = ...
 
 % The constant mode is active initially. In map mode, each component uses
 % a readable 2-D table. Empty templates make missing map data explicit.
+vehicle.energy.useSocLimits = true;
+vehicle.energy.measurementBoundary = 'storedEnergy';
+vehicle.energy.motorModel = struct('mode','constant','map',struct());
 vehicle.energy.efficiencyModel.mode = 'constant';
 vehicle.energy.efficiencyModel.motor.speed_rpm = [];
 vehicle.energy.efficiencyModel.motor.torque_Nm = [];
@@ -195,7 +198,7 @@ vehicle.energy.endOfLifeCapacityRetention = 0.90;
 vehicle.energy.packSpecificEnergy_Whpkg = 160;
 
 %% Suspension and chassis - reserved for Level 2.2 and later
-vehicle.suspension.frontRollMomentFraction = 0.50;
+vehicle.suspension.frontRollMomentFraction = 0.65;
 vehicle.suspension.frontCamber_rad = deg2rad(-1.0);
 vehicle.suspension.rearCamber_rad = deg2rad(-1.0);
 vehicle.suspension.frontRollStiffness_NmPerRad = NaN;
@@ -210,4 +213,20 @@ vehicle.suspension.rear.springRate_Npm = 88e3;
 vehicle.suspension.rear.motionRatioWheelPerDamper = 1.185;
 vehicle.suspension.rear.antiRollStiffness_NmPerRad = 0;
 vehicle.chassis.torsionalStiffness_NmPerRad = Inf;
+
+%% Operating-point validity limits
+% Steering, maximum validated normal load and minimum ride height are
+% current vehicle-design inputs. The remaining limits are explicitly
+% provisional until matching steering, tire-test and suspension data are
+% available for this vehicle and tire selection.
+vehicle.validity.maximumRoadWheelSteeringAngle_rad = deg2rad(30);
+vehicle.validity.minimumSlipAngle_rad = deg2rad(-15); % Provisional
+vehicle.validity.maximumSlipAngle_rad = deg2rad(15);  % Provisional
+vehicle.validity.minimumSlipRatio = -0.30;             % Provisional
+vehicle.validity.maximumSlipRatio = 0.30;              % Provisional
+vehicle.validity.minimumValidatedNormalLoad_N = 100;   % Provisional
+vehicle.validity.maximumValidatedNormalLoad_N = 2000;
+vehicle.validity.minimumRideHeight_mm = 10;
+vehicle.validity.maximumRideHeight_mm = 60;             % Provisional
+vehicle.validity.solverBoundMarginFraction = 0.05;
 end

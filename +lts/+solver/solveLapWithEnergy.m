@@ -1,185 +1,195 @@
-function result = solveLapWithEnergy(track, model, options)
-%SOLVELAPWITHENERGY Couple SoC-dependent drive power into the speed profile.
-% Total braking remains available through regeneration plus friction brakes.
+function result = solveLapWithEnergy(track,model,options)
+%SOLVELAPWITHENERGY SoC-coupled speed with one battery-to-wheel limit.
+% Friction brakes provide any braking force unavailable from regeneration.
 
 arguments
-    track (1, 1) struct
-    model (1, 1) struct
-    options.Repetitions (1, 1) double {mustBeInteger, mustBePositive} = 1
-    options.InitialSoc (1, 1) double {mustBeInRange(options.InitialSoc, 0, 1)} = 0.95
-    options.InitialSpeed_mps (1, 1) double = NaN
-    options.FinalSpeed_mps (1, 1) double {mustBeNonnegative} = 100
-    options.MaximumSpeed_mps (1, 1) double {mustBePositive} = 100
-    options.MaximumIterations (1, 1) double {mustBeInteger, mustBePositive} = 30
-    options.SpeedTolerance_mps (1, 1) double {mustBePositive} = 1e-5
+    track (1,1) struct
+    model (1,1) struct
+    options.Repetitions (1,1) double {mustBeInteger,mustBePositive} = 1
+    options.InitialSoc (1,1) double = NaN
+    options.InitialSpeed_mps (1,1) double = NaN
+    options.FinalSpeed_mps (1,1) double {mustBeNonnegative} = 100
+    options.MaximumSpeed_mps (1,1) double {mustBePositive} = 100
+    options.MaximumIterations (1,1) double {mustBeInteger,mustBePositive} = 30
+    options.SpeedTolerance_mps (1,1) double {mustBePositive} = 1e-5
+    options.BaseLap (1,1) struct = struct()
+    options.ReusePeriodicLaps (1,1) logical = true
 end
 
 lts.validation.validateTrack(track);
-assert(isfield(model, 'vehicle'), 'lts:solver:EnergyVehicle', ...
-    'The energy-coupled solver requires model.vehicle.');
+assert(isfield(model,'vehicle') && isfield(model.vehicle,'energy'), ...
+    'requires a vehicle with an energy model.');
 vehicle = model.vehicle;
-vehicle.energy.initialSoc = options.InitialSoc;
-expandedTrack = expandTrack(track, options.Repetitions);
-baseLap = lts.solver.solveLap(track, model, ...
-    initialSpeed_mps=defaultInitialSpeed(track, options.InitialSpeed_mps), ...
-    finalSpeed_mps=options.FinalSpeed_mps, ...
-    maximumSpeed_mps=options.MaximumSpeed_mps);
-speed_mps = expandSpeed(baseLap.speed_mps, options.Repetitions);
-distance_m = expandedTrack.distance_m;
-curvature_1pm = expandedTrack.curvature_1pm;
-segmentLength_m = diff(distance_m);
-initialSpeed_mps = speed_mps(1);
-if ~isnan(options.InitialSpeed_mps)
-    initialSpeed_mps = options.InitialSpeed_mps;
+if isnan(options.InitialSoc), options.InitialSoc=vehicle.energy.initialSoc; end
+assert(options.InitialSoc>=0 && options.InitialSoc<=1);
+vehicle.energy.initialSoc=options.InitialSoc;
+flat=isfield(vehicle.energy,'useSocLimits') && ~vehicle.energy.useSocLimits;
+if options.ReusePeriodicLaps && flat && track.isClosed && options.Repetitions>1 ...
+        && options.FinalSpeed_mps >= options.MaximumSpeed_mps
+    steady=lts.solver.solveLapWithEnergy(track,model, ...
+        InitialSoc=options.InitialSoc,InitialSpeed_mps=NaN, ...
+        BaseLap=options.BaseLap,MaximumIterations=options.MaximumIterations, ...
+        MaximumSpeed_mps=options.MaximumSpeed_mps,FinalSpeed_mps=options.FinalSpeed_mps, ...
+        SpeedTolerance_mps=options.SpeedTolerance_mps,ReusePeriodicLaps=false);
+    first=lts.solver.solveLapWithEnergy(track,model, ...
+        InitialSoc=options.InitialSoc,InitialSpeed_mps=options.InitialSpeed_mps, ...
+        BaseLap=steady,MaximumIterations=options.MaximumIterations, ...
+        MaximumSpeed_mps=options.MaximumSpeed_mps,FinalSpeed_mps=options.FinalSpeed_mps, ...
+        SpeedTolerance_mps=options.SpeedTolerance_mps,ReusePeriodicLaps=false);
+    if abs(first.speed_mps(end)-steady.speed_mps(1))<=options.SpeedTolerance_mps
+        ds=repmat(diff(track.distance_m(:)),options.Repetitions,1);
+        result=first;
+        result.distance_m=[0;cumsum(ds)];
+        result.speed_mps=[first.speed_mps; ...
+            repmat(steady.speed_mps(2:end),options.Repetitions-1,1)];
+        result.curvature_1pm=[repmat(track.curvature_1pm(1:end-1), ...
+            options.Repetitions,1);track.curvature_1pm(end)];
+        dt=2*ds./(result.speed_mps(1:end-1)+result.speed_mps(2:end));
+        result.time_s=[0;cumsum(dt)]; result.lapTime_s=result.time_s(end);
+        result.segmentAcceleration_mps2=diff(result.speed_mps.^2)./(2*ds);
+        result.lateralAcceleration_mps2=result.speed_mps.^2.*result.curvature_1pm;
+        result.energy=lts.energy.analyzeLap(result,vehicle);
+        if result.energy.energyBeyondInstalledCapacity_kWh==0
+            result.socBoundary=result.energy.profile.socBoundary;
+            result.meta.repetitions=options.Repetitions;
+            result.meta.periodicReuse=true;
+            result.meta.iterations=first.meta.iterations+steady.meta.iterations;
+            result.meta.powerLimitViolationEnergy_kWh=result.energy.powerLimitViolationEnergy_kWh;
+            result.meta.capacityShortfall_kWh=0;
+            assert(result.energy.powerLimitViolationEnergy_kWh<1e-8);
+            return
+        end
+    end
+end
+if options.Repetitions>1
+    assert(track.isClosed,'Repeated tracks must be closed.');
 end
 
-converged = false;
-for iteration = 1:options.MaximumIterations
-    previousSpeed_mps = speed_mps;
-    speed_mps = backwardPass(speed_mps, curvature_1pm, ...
-        segmentLength_m, model);
-    [speed_mps, socBoundary] = forwardEnergyPass(speed_mps, ...
-        curvature_1pm, segmentLength_m, model, vehicle, ...
-        initialSpeed_mps, options.InitialSoc);
-    if max(abs(speed_mps - previousSpeed_mps)) ...
-            <= options.SpeedTolerance_mps
-        converged = true;
+if isnan(options.InitialSpeed_mps)
+    if track.isClosed, initialSpeed=options.MaximumSpeed_mps; else, initialSpeed=0; end
+else
+    initialSpeed=options.InitialSpeed_mps;
+end
+if isempty(fieldnames(options.BaseLap))
+    baseInitialSpeed=initialSpeed;
+    if track.isClosed, baseInitialSpeed=options.MaximumSpeed_mps; end
+    base=lts.solver.solveLap(track,model, ...
+        initialSpeed_mps=baseInitialSpeed, ...
+        finalSpeed_mps=options.FinalSpeed_mps, ...
+        maximumSpeed_mps=options.MaximumSpeed_mps);
+else
+    base=options.BaseLap;
+    assert(isequal(base.distance_m(:),track.distance_m(:)) ...
+        && numel(base.speed_mps)==numel(track.distance_m), ...
+        'BaseLap must match the selected track.');
+end
+distance=[0;cumsum(repmat(diff(track.distance_m(:)), ...
+    options.Repetitions,1))];
+curvature=[repmat(track.curvature_1pm(1:end-1), ...
+    options.Repetitions,1);track.curvature_1pm(end)];
+speed=[repmat(base.speed_mps(1:end-1), ...
+    options.Repetitions,1);base.speed_mps(end)];
+validateattributes(speed, {'double'}, {'column','real','finite','nonnegative'});
+% A supplied profile is an upper estimate, not permission to ignore inputs.
+speed=min(speed,options.MaximumSpeed_mps);
+speed(end)=min(speed(end),options.FinalSpeed_mps);
+ds=diff(distance);
+converged=false;
+for iteration=1:options.MaximumIterations
+    previous=speed;
+    for i=numel(speed)-1:-1:1
+        ay=speed(i+1)^2*curvature(i+1);
+        envelope=model.accelerationLimits(speed(i+1),ay);
+        reachable=sqrt(max(0,speed(i+1)^2 ...
+            +2*envelope.maximumDeceleration_mps2*ds(i)));
+        speed(i)=min(speed(i),reachable);
+    end
+    speed(1)=min(speed(1),initialSpeed);
+    soc=zeros(numel(speed),1);
+    soc(1)=options.InitialSoc;
+    for i=2:numel(speed)
+        v0=speed(i-1);
+        ay=v0^2*curvature(i-1);
+        envelope=model.accelerationLimits(v0,ay);
+        envelopeSpeed=sqrt(max(0,v0^2 ...
+            +2*envelope.maximumAcceleration_mps2*ds(i-1)));
+        speed(i)=min(speed(i),envelopeSpeed);
+        speed(i)=limitSegmentAtMeanSpeed(vehicle,v0,speed(i), ...
+            ds(i-1),soc(i-1));
+        vMean=(v0+speed(i))/2;
+        dt=2*ds(i-1)/(v0+speed(i));
+        actualAx=(speed(i)^2-v0^2)/(2*ds(i-1));
+        wheelForce=requiredWheelForce(vehicle,vMean,actualAx);
+        step=lts.energy.propagateSegment(vehicle,soc(i-1),vMean, ...
+            wheelForce,ds(i-1),dt);
+        soc(i)=step.nextSoc;
+    end
+    if track.isClosed && options.Repetitions==1 && isnan(options.InitialSpeed_mps)
+        seam=min(speed(1),speed(end)); speed(1)=seam; speed(end)=seam;
+    end
+    if max(abs(speed-previous))<=options.SpeedTolerance_mps
+        converged=true;
         break
     end
 end
-assert(converged, 'lts:solver:EnergyNoConvergence', ...
-    'Energy-coupled solver did not converge within %d iterations.', ...
-    options.MaximumIterations);
-
-segmentTime_s = 2 * segmentLength_m ...
-    ./ (speed_mps(1:end-1) + speed_mps(2:end));
-assert(all(isfinite(segmentTime_s)), 'lts:solver:InfiniteLapTime', ...
-    'The energy-coupled profile contains a zero-speed segment.');
-time_s = [0; cumsum(segmentTime_s)];
-result.meta.modelName = model.name;
-result.meta.modelLevel = '2.4c';
-result.meta.baseModelLevel = model.level;
-result.meta.iterations = iteration;
-result.meta.converged = converged;
-result.meta.repetitions = options.Repetitions;
-result.lapTime_s = time_s(end);
-result.distance_m = distance_m;
-result.time_s = time_s;
-result.speed_mps = speed_mps;
-result.curvature_1pm = curvature_1pm;
-result.lateralAcceleration_mps2 = speed_mps .^ 2 .* curvature_1pm;
-result.segmentAcceleration_mps2 = ...
-    diff(speed_mps .^ 2) ./ (2 * segmentLength_m);
-result.socBoundary = socBoundary;
-result.energy = lts.energy.analyzeLap(result, vehicle);
+assert(converged,'speed/SoC iteration did not converge.');
+dt=2*ds./(speed(1:end-1)+speed(2:end));
+assert(all(isfinite(dt)) && all(dt>0),'Invalid segment times.');
+result.meta.modelName=model.name;
+result.meta.modelLevel='2.4c';
+if isfield(model,'level'), result.meta.baseModelLevel=model.level; end
+result.meta.iterations=iteration;
+result.meta.converged=converged;
+result.meta.repetitions=options.Repetitions;
+result.distance_m=distance;
+result.time_s=[0;cumsum(dt)];
+result.lapTime_s=result.time_s(end);
+result.speed_mps=speed;
+result.curvature_1pm=curvature;
+result.lateralAcceleration_mps2=speed.^2.*curvature;
+result.segmentAcceleration_mps2=diff(speed.^2)./(2*ds);
+result.socBoundary=soc;
+result.energy=lts.energy.analyzeLap(result,vehicle);
+result.meta.powerLimitViolationEnergy_kWh= ...
+    result.energy.powerLimitViolationEnergy_kWh;
+assert(result.meta.powerLimitViolationEnergy_kWh<1e-8, ...
+    'coupled speed still exceeds the battery discharge limit.');
+result.meta.capacityShortfall_kWh= ...
+    result.energy.energyBeyondInstalledCapacity_kWh;
 end
 
-function speed_mps = backwardPass(speed_mps, curvature_1pm, ...
-        segmentLength_m, model)
-for point = numel(speed_mps)-1:-1:1
-    lateralAcceleration_mps2 = speed_mps(point + 1) ^ 2 ...
-        * curvature_1pm(point + 1);
-    limits = model.accelerationLimits(speed_mps(point + 1), ...
-        lateralAcceleration_mps2);
-    reachableSpeed_mps = sqrt(max(0, speed_mps(point + 1) ^ 2 ...
-        + 2 * limits.maximumDeceleration_mps2 * segmentLength_m(point)));
-    speed_mps(point) = min(speed_mps(point), reachableSpeed_mps);
-end
-end
-
-function [speed_mps, socBoundary] = forwardEnergyPass(speed_mps, ...
-        curvature_1pm, segmentLength_m, model, vehicle, ...
-        initialSpeed_mps, initialSoc)
-speed_mps(1) = min(speed_mps(1), initialSpeed_mps);
-socBoundary = zeros(numel(speed_mps), 1);
-socBoundary(1) = initialSoc;
-for point = 2:numel(speed_mps)
-    speedBefore_mps = speed_mps(point - 1);
-    lateralAcceleration_mps2 = speedBefore_mps ^ 2 ...
-        * curvature_1pm(point - 1);
-    limits = model.accelerationLimits(speedBefore_mps, ...
-        lateralAcceleration_mps2);
-    maximumAcceleration_mps2 = energyLimitedAcceleration(vehicle, ...
-        speedBefore_mps, socBoundary(point - 1), ...
-        limits.maximumAcceleration_mps2);
-    reachableSpeed_mps = sqrt(max(0, speedBefore_mps ^ 2 ...
-        + 2 * maximumAcceleration_mps2 * segmentLength_m(point - 1)));
-    speed_mps(point) = min(speed_mps(point), reachableSpeed_mps);
-    averageSpeed_mps = (speedBefore_mps + speed_mps(point)) / 2;
-    segmentTime_s = 2 * segmentLength_m(point - 1) ...
-        / (speedBefore_mps + speed_mps(point));
-    actualAcceleration_mps2 = (speed_mps(point) ^ 2 ...
-        - speedBefore_mps ^ 2) / (2 * segmentLength_m(point - 1));
-    wheelForce_N = requiredWheelForce(vehicle, averageSpeed_mps, ...
-        actualAcceleration_mps2);
-    step = lts.energy.propagateSegment(vehicle, ...
-        socBoundary(point - 1), averageSpeed_mps, wheelForce_N, ...
-        segmentLength_m(point - 1), segmentTime_s);
-    socBoundary(point) = step.nextSoc;
-end
-end
-
-function maximumAcceleration_mps2 = energyLimitedAcceleration(vehicle, ...
-        speed_mps, soc, modelMaximumAcceleration_mps2)
-if speed_mps <= 0.5
-    maximumAcceleration_mps2 = modelMaximumAcceleration_mps2;
+function v1=limitSegmentAtMeanSpeed(vehicle,v0,v1,ds,soc)
+% The energy integrator evaluates wheel work at segment-mean speed.
+% Enforce the same motor/battery force bound at that point, not at v0.
+if segmentWithinDriveLimit(vehicle,v0,v1,ds,soc)
     return
 end
-limits = lts.energy.limitsAtSoc(vehicle, soc);
-baseWheelForce_N = requiredWheelForce(vehicle, speed_mps, ...
-    modelMaximumAcceleration_mps2);
-efficiency = lts.energy.conversionEfficiencies(vehicle, speed_mps, ...
-    baseWheelForce_N, soc, "drive");
-availableTractionBatteryPower_W = max(0, ...
-    limits.maximumBatteryDischargePower_W ...
-    - vehicle.energy.auxiliaryPower_W);
-maximumWheelForce_N = availableTractionBatteryPower_W ...
-    * efficiency.total / speed_mps;
-roadLoad_N = requiredWheelForce(vehicle, speed_mps, 0);
-powerLimitedAcceleration_mps2 = ...
-    (maximumWheelForce_N - roadLoad_N) / vehicle.mass.total_kg;
-maximumAcceleration_mps2 = min(modelMaximumAcceleration_mps2, ...
-    max(0, powerLimitedAcceleration_mps2));
-end
-
-function wheelForce_N = requiredWheelForce(vehicle, speed_mps, ...
-        acceleration_mps2)
-aero = lts.aerodynamics.forces(vehicle.aerodynamics, speed_mps);
-rollingForce_N = vehicle.energy.rollingResistanceCoefficient ...
-    * (vehicle.mass.total_kg * 9.81 + aero.totalDownforce_N);
-wheelForce_N = vehicle.mass.total_kg * acceleration_mps2 ...
-    + aero.drag_N + rollingForce_N;
-end
-
-function expanded = expandTrack(track, repetitions)
-if repetitions > 1
-    assert(track.isClosed, 'lts:solver:EnergyRepetitions', ...
-        'Repeated energy-coupled tracks must be closed.');
-end
-baseSegmentLength_m = diff(track.distance_m(:));
-baseCurvature_1pm = track.curvature_1pm(:);
-expanded.distance_m = [0; cumsum(repmat(baseSegmentLength_m, repetitions, 1))];
-expanded.curvature_1pm = [repmat(baseCurvature_1pm(1:end-1), ...
-    repetitions, 1); baseCurvature_1pm(end)];
-expanded.isClosed = false;
-expanded.meta = track.meta;
-expanded.meta.name = [track.meta.name, '_energyCoupled'];
-end
-
-function expandedSpeed_mps = expandSpeed(baseSpeed_mps, repetitions)
-baseSpeed_mps = baseSpeed_mps(:);
-expandedSpeed_mps = [repmat(baseSpeed_mps(1:end-1), repetitions, 1); ...
-    baseSpeed_mps(end)];
-end
-
-function initialSpeed_mps = defaultInitialSpeed(track, requestedSpeed_mps)
-if isnan(requestedSpeed_mps)
-    if track.isClosed
-        initialSpeed_mps = 100;
+upper=v1;
+lower=0;
+assert(segmentWithinDriveLimit(vehicle,v0,lower,ds,soc), ...
+    'No feasible segment speed under the battery/motor limits.');
+for k=1:36
+    candidate=(lower+upper)/2;
+    if segmentWithinDriveLimit(vehicle,v0,candidate,ds,soc)
+        lower=candidate;
     else
-        initialSpeed_mps = 0;
+        upper=candidate;
     end
-else
-    initialSpeed_mps = requestedSpeed_mps;
 end
+v1=lower;
+end
+
+function feasible=segmentWithinDriveLimit(vehicle,v0,v1,ds,soc)
+vMean=(v0+v1)/2;
+ax=(v1^2-v0^2)/(2*ds);
+needed=requiredWheelForce(vehicle,vMean,ax);
+if needed<=0, feasible=true; return; end
+feasible=lts.powertrain.driveDemandFeasible(vehicle,vMean,needed,soc);
+end
+
+function force=requiredWheelForce(vehicle,speed,acceleration)
+aero=lts.aerodynamics.forces(vehicle.aerodynamics,speed);
+rolling=vehicle.energy.rollingResistanceCoefficient ...
+    *(vehicle.mass.total_kg*9.81+aero.totalDownforce_N);
+force=vehicle.mass.total_kg*acceleration+aero.drag_N+rolling;
 end

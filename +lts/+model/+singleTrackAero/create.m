@@ -19,19 +19,10 @@ model.operatingPoint = @(speed_mps, longitudinalAcceleration_mps2, ...
 end
 
 function maximumSpeed_mps = maximumSpeedForCurvature(vehicle, peakEnvelope, curvature_1pm)
-drive = lts.powertrain.maximumDriveForce(vehicle.powertrain, 0);
-lowerSpeed_mps = zeros(size(curvature_1pm));
-upperSpeed_mps = drive.maximumVehicleSpeed_mps * ones(size(curvature_1pm));
-for iteration = 1:28
-    candidateSpeed_mps = (lowerSpeed_mps + upperSpeed_mps) / 2;
-    lateralAcceleration_mps2 = candidateSpeed_mps .^ 2 .* curvature_1pm;
-    feasible = lts.model.singleTrackAero.feasibleMask(vehicle, ...
-        candidateSpeed_mps, zeros(size(candidateSpeed_mps)), ...
-        lateralAcceleration_mps2, peakEnvelope);
-    lowerSpeed_mps(feasible) = candidateSpeed_mps(feasible);
-    upperSpeed_mps(~feasible) = candidateSpeed_mps(~feasible);
-end
-maximumSpeed_mps = lowerSpeed_mps;
+query = @(speed, ay) lts.model.singleTrackAero.feasibleMask( ...
+    vehicle, speed, zeros(size(speed)), ay, peakEnvelope);
+maximumSpeed_mps = lts.model.maximumSteadySpeed( ...
+    vehicle, curvature_1pm, query, 28);
 end
 
 function limits = accelerationLimits(vehicle, peakEnvelope, speed_mps, lateralAcceleration_mps2)

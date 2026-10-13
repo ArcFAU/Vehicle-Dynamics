@@ -7,21 +7,21 @@ model.
 
 ## Starting a study
 
-`config/sensitivityStudyCase.m` is the readable user-facing setup. Copy it to a
+`config/sensitivityStudyCaseV2.m` is the readable user-facing setup. Copy it to a
 new filename for a new event or season, adjust its function name and pass the
-returned struct to `runSensitivityStudy`.
+returned struct to `runSensitivityStudyV2`.
 
 ```matlab
-caseConfig = sensitivityStudyCase(Study="mass", ...
-    Model="dualTrackEnvelope", PowertrainLayout="fourMotorAWD", ...
+caseConfig = sensitivityStudyCaseV2(Study="mass", ...
+    Model="dualTrack", Aero=true,LoadTransfer=true,Energy=true, PowertrainLayout="fourMotorAWD", ...
     TireModel="fittedCombinedSlip", IncludeDriverless=true, ...
-    CoupleEnergy=true, CreatePlots=true);
-study = runSensitivityStudy(caseConfig);
+    CoupleEnergy=false, CreatePlots=true);
+study = runSensitivityStudyV2(caseConfig);
 ```
 
-There is deliberately no no-argument or short-name execution path. Study,
-model, powertrain layout, tire model, event scope, energy coupling and plot
-creation must be selected explicitly before a simulation starts.
+The no-argument V2 runner exposes a default setup in its source. For a
+reproducible custom study, select model, features, powertrain, tire model, event
+scope, energy coupling and plot creation explicitly in the V2 configuration.
 
 Available names are `mass`, `massYaw`, `massDistribution`, `downforce`,
 `aeroBalance`, `aeroMap`, `power` and `brakeBias`. The two axes of `aeroMap`
@@ -42,15 +42,15 @@ after changing its vehicle or physics fields without reviewing every option.
 For an idealized system-power study, secondary limits can be disabled:
 
 ```matlab
-caseConfig = sensitivityStudyCase(Study="power", ...
-    Model="dualTrackEnvelope", PowertrainLayout="fourMotorAWD", ...
+caseConfig = sensitivityStudyCaseV2(Study="power", ...
+    Model="dualTrack", Aero=true,LoadTransfer=true,Energy=true, PowertrainLayout="fourMotorAWD", ...
     TireModel="fittedCombinedSlip", IncludeDriverless=false, ...
     CoupleEnergy=false, CreatePlots=true);
 caseConfig.baseVehicle.powertrain.limitOptions.motorTorqueEnabled = false;
 caseConfig.baseVehicle.powertrain.limitOptions.motorPowerEnabled = false;
 caseConfig.baseVehicle.powertrain.limitOptions.motorSpeedEnabled = false;
 caseConfig.baseVehicle.powertrain.limitOptions.socPowerScaleEnabled = false;
-study = runSensitivityStudy(caseConfig);
+study = runSensitivityStudyV2(caseConfig);
 ```
 
 The battery discharge limit belongs to the optional coupled-energy calculation
@@ -95,7 +95,12 @@ sensitivities because a simulated time changes points when it passes a
 competitor time. Driverless events are present in the catalog and are included
 only when `includeDriverless` is true.
 
-Efficiency uses the FSG 2026 factor `time_s^2 * netBatteryEnergy_kWh`. Its
+Efficiency uses the FSG 2026 factor `time_s^2 * scoringEnergy_kWh`. Scoring
+energy is DC-terminal discharge plus auxiliary energy minus credited terminal
+regeneration. The credit is configured in the efficiency rule reference;
+`lts.scoring.energyForEfficiency` calculates it outside vehicle physics.
+Imported manual results with only `netBatteryEnergy_kWh` are treated as
+already prepared scoring energy. Its
 annual reference is `references.efficiency.minimumFactor_s2kWh`. The units of
 the team and reference factor must match; kWh is used throughout nextGen.
 
@@ -122,4 +127,4 @@ Energy outputs include net and gross battery energy, theoretical and actual
 recuperation, friction-brake energy, charge/discharge peaks, required installed
 capacity, Ah target and estimated pack mass. The study also returns local
 sensitivities for event time, net energy, recovered energy and installed
-capacity. `runEnergyReport` prints the baseline values for all selected events.
+capacity. `runEnergyReportV2` prints the baseline values for all selected events.

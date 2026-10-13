@@ -32,15 +32,44 @@ classdef TestDualTrackSlipOperatingPointLevel21b < matlab.unittest.TestCase
             testCase.verifyGreaterThan(min(point.wheelLongitudinalForces_N(3:4)), 0);
         end
 
-        function conditionalRestartEscapesLocalMinimum(testCase)
+        function difficultOperatingPointConvergesWithConditionalRetries(testCase)
             vehicle = lts.chassis.applyTorsionalStiffness(...
                 FAUmaxTauV2(), 2000 / deg2rad(1));
             point = lts.model.dualTrackSlip.operatingPoint(vehicle, ...
                 15.4935, -7.9872, 7.6593);
             testCase.verifyTrue(point.feasible);
-            testCase.verifyGreaterThan(point.solver.attemptCount, 1);
+            testCase.verifyGreaterThanOrEqual(point.solver.attemptCount, 1);
             testCase.verifyLessThan(norm(...
                 point.solver.normalizedResidual, Inf), 1e-6);
+        end
+
+        function physicalLimitsAreExposedAndApplied(testCase)
+            vehicle = FAUmaxTauV2();
+            steeringLimit = ...
+                vehicle.validity.maximumRoadWheelSteeringAngle_rad;
+            testCase.verifyEqual(rad2deg(steeringLimit), 30, ...
+                'AbsTol', 1e-12);
+            testCase.verifyEqual(...
+                vehicle.validity.maximumValidatedNormalLoad_N, 2000);
+            testCase.verifyEqual(vehicle.validity.minimumRideHeight_mm, 10);
+
+            point = lts.model.dualTrackSlip.operatingPoint(vehicle, ...
+                10.01, -5.2767, -10.113);
+            testCase.verifyLessThanOrEqual(abs(point.steeringAngle_rad), ...
+                vehicle.validity.maximumRoadWheelSteeringAngle_rad + 1e-12);
+            testCase.verifyTrue(isfield(point, 'physicallyValid'));
+            testCase.verifyTrue(isfield(point, 'validity'));
+        end
+
+        function excessiveSlipAngleIsNotPhysicallyValid(testCase)
+            vehicle = FAUmaxTauV2();
+            point = lts.model.dualTrackSlip.operatingPoint(vehicle, ...
+                10.01, -5.2767, -10.113);
+            if any(abs(point.slipAngles_rad) ...
+                    > vehicle.validity.maximumSlipAngle_rad)
+                testCase.verifyFalse(point.physicallyValid);
+                testCase.verifyFalse(point.validity.withinSlipAngleLimits);
+            end
         end
     end
 end

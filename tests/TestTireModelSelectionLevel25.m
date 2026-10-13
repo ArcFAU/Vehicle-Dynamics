@@ -52,6 +52,8 @@ classdef TestTireModelSelectionLevel25 < matlab.unittest.TestCase
                 18, 1.5, 7);
             testCase.verifyTrue(point.feasible);
             testCase.verifyEqual(point.tireModel, 'tmeasyAdtm');
+            testCase.verifyEqual(point.solver.initializationEnvelope, ...
+                'numericalInitializationOnly');
             testCase.verifyLessThan(norm(point.solver.normalizedResidual, Inf), ...
                 1e-6);
         end

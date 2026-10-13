@@ -1,6 +1,18 @@
 function caseConfig = sensitivityStudyCase(options)
 %SENSITIVITYSTUDYCASE Readable event and scoring setup for concept studies.
-% Select a predefined FAUmax Tau study with the Study name-value argument.
+%   Selects a predefined FAUmax Tau parameter study and returns the complete
+%   internal configuration adapted by sensitivityStudyCaseV2 for V2 runners.
+%
+%   Example:
+%       caseConfig = sensitivityStudyCase(Study="mass", ...
+%           Model="pointMassAero", PowertrainLayout="fourMotorAWD", ...
+%           TireModel="fittedCombinedSlip", IncludeDriverless=false, ...
+%           CoupleEnergy=false, CreatePlots=true);
+%   Use sensitivityStudyCaseV2 and runSensitivityStudyV2 for public runs.
+%
+%   The available study definitions are listed in the study-selection
+%   section below. Copy the returned struct before making case-specific
+%   changes, so the predefined setup remains reproducible.
 
 arguments
     options.Study (1, 1) string

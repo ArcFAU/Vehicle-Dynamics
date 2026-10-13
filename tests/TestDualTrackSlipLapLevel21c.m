@@ -26,7 +26,7 @@ classdef TestDualTrackSlipLapLevel21c < matlab.unittest.TestCase
             testCase.verifyGreaterThan(min(...
                 performanceMap.maximumLateralAcceleration_mps2, [], 'all'), 0);
             testCase.verifyEqual(...
-                performanceMap.meta.interpolationSafetyFactor, 0.80);
+                performanceMap.meta.interpolationSafetyFactor, 1.0);
         end
 
         function interpolatedLimitsUseLapInterface(testCase)

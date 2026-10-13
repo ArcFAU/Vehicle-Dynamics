@@ -60,7 +60,10 @@ rule.reference = struct('bestTime_s', bestTime_s);
 end
 
 function reference = readEfficiencyReference(references)
-reference = struct('minimumFactor_s2kWh', NaN);
+reference = struct('minimumFactor_s2kWh', NaN, 'regenEnergyCredit', 0.9);
+if isfield(references,'efficiency') && isfield(references.efficiency,'regenEnergyCredit')
+    reference.regenEnergyCredit=references.efficiency.regenEnergyCredit;
+end
 if isfield(references, 'efficiency') ...
         && isfield(references.efficiency, 'minimumFactor_s2kWh')
     reference.minimumFactor_s2kWh = ...

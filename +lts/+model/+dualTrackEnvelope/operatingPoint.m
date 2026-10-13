@@ -1,5 +1,10 @@
-function point = operatingPoint(vehicle, speed_mps, longitudinalAcceleration_mps2, lateralAcceleration_mps2)
+function point = operatingPoint(vehicle, speed_mps, ...
+    longitudinalAcceleration_mps2, lateralAcceleration_mps2, peakEnvelope)
 %OPERATINGPOINT Named four-wheel state and equilibrium residuals.
+
+if nargin < 5
+    peakEnvelope = lts.tire.createPeakEnvelope(vehicle);
+end
 
 validateattributes(speed_mps, {'numeric'}, {'scalar', 'real', 'finite', 'nonnegative'});
 validateattributes(longitudinalAcceleration_mps2, {'numeric'}, ...
@@ -7,7 +12,7 @@ validateattributes(longitudinalAcceleration_mps2, {'numeric'}, ...
 validateattributes(lateralAcceleration_mps2, {'numeric'}, ...
     {'scalar', 'real', 'finite'});
 state = lts.model.dualTrackEnvelope.calculateState(vehicle, speed_mps, ...
-    longitudinalAcceleration_mps2, lateralAcceleration_mps2);
+    longitudinalAcceleration_mps2, lateralAcceleration_mps2, peakEnvelope);
 mass_kg = vehicle.mass.total_kg;
 frontFraction = vehicle.geometry.frontMassFraction;
 distanceCgToFront_m = vehicle.geometry.wheelbase_m * (1 - frontFraction);

@@ -1,7 +1,12 @@
-function state = calculateState(vehicle, speed_mps, longitudinalAcceleration_mps2, lateralAcceleration_mps2)
+function state = calculateState(vehicle, speed_mps, ...
+    longitudinalAcceleration_mps2, lateralAcceleration_mps2, peakEnvelope)
 %CALCULATESTATE Four-wheel normal loads and force-envelope allocation.
 % Wheel order is FL, FR, RL, RR. Positive ay is a left turn, therefore the
 % right wheels are outside and gain normal load.
+
+if nargin < 5
+    peakEnvelope = lts.tire.createPeakEnvelope(vehicle);
+end
 
 mass_kg = vehicle.mass.total_kg;
 frontFraction = vehicle.geometry.frontMassFraction;
@@ -37,12 +42,16 @@ state.normalLoads_N = [frontAxleLoad_N / 2 - frontTransferPerSide_N, ...
 
 frontLateralForce_N = mass_kg .* lateralAcceleration_mps2 * frontFraction;
 rearLateralForce_N = mass_kg .* lateralAcceleration_mps2 * rearFraction;
-pureForceCapacity_N = lts.tire.maximumForce(vehicle.tireEnvelope, ...
-    max(state.normalLoads_N, 0));
-frontCapacitySum_N = pureForceCapacity_N(:, 1) + pureForceCapacity_N(:, 2);
-rearCapacitySum_N = pureForceCapacity_N(:, 3) + pureForceCapacity_N(:, 4);
-frontWeights = safeWeights(pureForceCapacity_N(:, 1:2), frontCapacitySum_N);
-rearWeights = safeWeights(pureForceCapacity_N(:, 3:4), rearCapacitySum_N);
+cambers_rad = repmat([vehicle.suspension.frontCamber_rad, ...
+    -vehicle.suspension.frontCamber_rad, ...
+    vehicle.suspension.rearCamber_rad, ...
+    -vehicle.suspension.rearCamber_rad], size(state.normalLoads_N, 1), 1);
+peaks = lts.tire.peakForces(peakEnvelope, ...
+    max(state.normalLoads_N, 0), cambers_rad);
+frontCapacitySum_N = peaks.lateral_N(:, 1) + peaks.lateral_N(:, 2);
+rearCapacitySum_N = peaks.lateral_N(:, 3) + peaks.lateral_N(:, 4);
+frontWeights = safeWeights(peaks.lateral_N(:, 1:2), frontCapacitySum_N);
+rearWeights = safeWeights(peaks.lateral_N(:, 3:4), rearCapacitySum_N);
 state.lateralForces_N = [frontWeights .* frontLateralForce_N, ...
     rearWeights .* rearLateralForce_N];
 
@@ -50,10 +59,13 @@ requiredTireForce_N = mass_kg .* longitudinalAcceleration_mps2 + aero.drag_N;
 useIdealDrive = strcmp(vehicle.controls.driveAllocation.mode, 'ideal');
 useIdealBrake = strcmp(vehicle.controls.brakeAllocation.mode, 'ideal');
 if useIdealDrive || useIdealBrake
-    longitudinalCapacities_N = lts.tire.combinedLongitudinalCapacity( ...
-        vehicle.tireEnvelope, max(state.normalLoads_N, 0), ...
-        state.lateralForces_N);
-    state.longitudinalForces_N = zeros(size(longitudinalCapacities_N));
+    driveCapacities_N = lts.tire.directionalLongitudinalCapacity( ...
+        peakEnvelope, max(state.normalLoads_N, 0), ...
+        state.lateralForces_N, cambers_rad,"drive");
+    brakeCapacities_N = lts.tire.directionalLongitudinalCapacity( ...
+        peakEnvelope, max(state.normalLoads_N, 0), ...
+        state.lateralForces_N, cambers_rad,"brake");
+    state.longitudinalForces_N = zeros(size(driveCapacities_N));
     allocationFeasible = false(size(requiredTireForce_N));
     allocations = cell(numel(requiredTireForce_N), 1);
     for row = 1:numel(requiredTireForce_N)
@@ -61,8 +73,10 @@ if useIdealDrive || useIdealBrake
         if requiredTireForce_N(row) < 0
             operation = "brake";
         end
+        longitudinalCapacities_N = driveCapacities_N(row,:);
+        if operation == "brake", longitudinalCapacities_N = brakeCapacities_N(row,:); end
         allocation = lts.control.allocateLongitudinalForces(vehicle, ...
-            speed_mps(row), longitudinalCapacities_N(row, :), ...
+            speed_mps(row), longitudinalCapacities_N, ...
             state.lateralForces_N(row, :), requiredTireForce_N(row), ...
             operation);
         state.longitudinalForces_N(row, :) = allocation.forces_N;
@@ -84,9 +98,9 @@ else
     allocationFeasible = true(size(requiredTireForce_N));
 end
 
-state.tireUtilization = lts.tire.utilization(vehicle.tireEnvelope, ...
+state.tireUtilization = lts.tire.directionalUtilization(peakEnvelope, ...
     max(state.normalLoads_N, 0), state.longitudinalForces_N, ...
-    state.lateralForces_N);
+    state.lateralForces_N, cambers_rad);
 drive = lts.powertrain.maximumDriveForce(vehicle.powertrain, speed_mps);
 state.aero = aero;
 state.driveForceRequired_N = max(requiredTireForce_N, 0);

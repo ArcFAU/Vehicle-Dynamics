@@ -155,3 +155,23 @@ states. A common SI interface supplies normal load, camber, slip ratio, slip
 angle and speed. Performance maps store both model and parameter-set identity.
 The initial Hoosier parameter set combines lateral and longitudinal data from
 different tire sizes and is therefore marked as a development reference.
+# Hinweis zur öffentlichen V2-Schnittstelle
+
+Die Level in diesem Dokument beschreiben weiterhin die vorhandenen validierten
+Rechenkerne. Für neue Studien werden sie nicht mehr direkt ausgewählt. Die
+transparente V2 bietet ausschließlich `pointMass`, `singleTrack` und
+`dualTrack` plus explizite Feature-Flags an und legt die tatsächlich verwendete
+Level-Implementierung offen. Siehe `transparent-v2.md`.
+
+## Bereinigung am 2026-10-13
+
+Die allgemeine Simulation und die FSG-Studien verwenden unmittelbar
+`lts.model.dualTrackEnvelope`; die frühere V8-Hülle wurde entfernt. Die Querlastprüfung bleibt unabhängig von idealer
+Längskraftallokation wirksam. `lts.model.maximumSteadySpeed` löst die
+Geschwindigkeitssuche auch ohne aktive Motordrehzahlgrenze. Antriebs- und
+Bremspeaks im Massepunktmodell werden getrennt ausgewertet.
+
+Aktive Runner, Referenzdaten und Qualitätsprüfungen sind in
+`script-execution-flow.md` dokumentiert. Die aktuellen Referenzdaten sind
+projektlokale Eingaben unter `data`; erzeugte Ergebnisse und Sicherungen sind
+keine Laufzeitquellen der allgemeinen Simulation.

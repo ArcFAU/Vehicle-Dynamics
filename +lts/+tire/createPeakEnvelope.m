@@ -10,6 +10,10 @@ end
 
 envelope.combinedForceExponent = vehicle.tireEnvelope.combinedForceExponent;
 envelope.fallback = vehicle.tireEnvelope;
+if isfield(vehicle.tireEnvelope,'peakEnvelope')
+    envelope = vehicle.tireEnvelope.peakEnvelope;
+    return
+end
 switch vehicle.tireModel.active
     case 'fittedCombinedSlip'
         configuration = vehicle.tireModel.fittedCombinedSlip;

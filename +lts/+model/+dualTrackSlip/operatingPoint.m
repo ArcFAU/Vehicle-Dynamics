@@ -21,8 +21,10 @@ validateattributes(lateralAcceleration_mps2, {'numeric'}, ...
     {'scalar', 'real', 'finite'});
 tireModel = lts.tire.create(vehicle);
 vehicle.controls.targetYawMoment_Nm = options.targetYawMoment_Nm;
+initializationEnvelope = createInitializationEnvelope(vehicle);
 envelopeState = lts.model.dualTrackEnvelope.calculateState(vehicle, ...
-    speed_mps, longitudinalAcceleration_mps2, lateralAcceleration_mps2);
+    speed_mps, longitudinalAcceleration_mps2, lateralAcceleration_mps2, ...
+    initializationEnvelope);
 normalLoads_N = envelopeState.normalLoads_N;
 targetLongitudinalForces_N = envelopeState.longitudinalForces_N;
 if any(normalLoads_N <= 0)
@@ -39,8 +41,14 @@ else
         'A slip-solver initial guess must contain six values.');
     initial = options.initialUnknowns(:);
 end
-lowerBounds = [-0.5; -0.8; -0.5 * ones(4, 1)];
-upperBounds = [0.5; 0.8; 0.5 * ones(4, 1)];
+steeringLimit_rad = vehicle.validity.maximumRoadWheelSteeringAngle_rad;
+minimumSlipRatio = vehicle.validity.minimumSlipRatio;
+maximumSlipRatio = vehicle.validity.maximumSlipRatio;
+lowerBounds = [-0.5; -steeringLimit_rad; ...
+    minimumSlipRatio * ones(4, 1)];
+upperBounds = [0.5; steeringLimit_rad; ...
+    maximumSlipRatio * ones(4, 1)];
+initial = max(min(initial, upperBounds), lowerBounds);
 objective = @(unknowns) lts.model.dualTrackSlip.residualVector(...
     vehicle, tireModel, speed_mps, longitudinalAcceleration_mps2, ...
     lateralAcceleration_mps2, unknowns, normalLoads_N, ...
@@ -79,6 +87,7 @@ point.solver.attemptCount = attemptCount;
 point.solver.residualNorm = residualNorm;
 point.solver.normalizedResidual = normalizedResidual;
 point.solver.solution = solution;
+point.solver.initializationEnvelope = initializationEnvelope.classification;
 point.driveForceAvailable_N = drive.maximumForce_N;
 point.driveForceUsed_N = positiveWheelForce_N;
 point.tireModel = tireModel.type;
@@ -86,6 +95,58 @@ point.tireParameterSet = tireModel.parameterSet;
 point.targetYawMoment_Nm = options.targetYawMoment_Nm;
 point.feasible = exitFlag > 0 && norm(normalizedResidual, Inf) < 1e-6 ...
     && positiveWheelForce_N <= drive.maximumForce_N + 1e-6;
+point.validity = physicalValidity(point, vehicle, lowerBounds, upperBounds);
+point.physicallyValid = point.feasible ...
+    && point.validity.withinSteeringLimits ...
+    && point.validity.withinSlipAngleLimits ...
+    && point.validity.withinSlipRatioLimits ...
+    && point.validity.withinNormalLoadLimits ...
+    && point.validity.awayFromSolverBounds;
+end
+
+function validity = physicalValidity(point, vehicle, lowerBounds, upperBounds)
+limits = vehicle.validity;
+validity.withinSteeringLimits = ...
+    abs(point.steeringAngle_rad) ...
+    <= limits.maximumRoadWheelSteeringAngle_rad + 1e-12;
+validity.withinSlipAngleLimits = ...
+    all(point.slipAngles_rad >= limits.minimumSlipAngle_rad) ...
+    && all(point.slipAngles_rad <= limits.maximumSlipAngle_rad);
+validity.withinSlipRatioLimits = ...
+    all(point.slipRatios >= limits.minimumSlipRatio) ...
+    && all(point.slipRatios <= limits.maximumSlipRatio);
+validity.withinNormalLoadLimits = ...
+    all(point.normalLoads_N >= limits.minimumValidatedNormalLoad_N) ...
+    && all(point.normalLoads_N <= limits.maximumValidatedNormalLoad_N);
+
+margin = limits.solverBoundMarginFraction;
+span = upperBounds - lowerBounds;
+marginLower = lowerBounds + margin * span;
+marginUpper = upperBounds - margin * span;
+solution = point.solver.solution;
+validity.awayFromSolverBounds = all(solution >= marginLower - 1e-12) ...
+    && all(solution <= marginUpper + 1e-12);
+validity.minimumSolverBoundMargin = min([...
+    solution - lowerBounds; upperBounds - solution]);
+end
+
+function envelope = createInitializationEnvelope(vehicle)
+%CREATEINITIALIZATIONENVELOPE Numerical seed, not the solved tire physics.
+% The nonlinear residual always evaluates the explicitly selected tire model.
+% TMeasy has no validated fast peak adapter, so its solver seed uses the
+% declared load-sensitive envelope without enabling a physical approximation.
+
+if strcmp(vehicle.tireModel.active, 'fittedCombinedSlip')
+    envelope = lts.tire.createPeakEnvelope(vehicle);
+else
+    envelope.type = 'loadSensitiveSymmetric';
+    envelope.name = 'Numerical initialization envelope';
+    envelope.parameters = struct();
+    envelope.fallback = vehicle.tireEnvelope;
+    envelope.combinedForceExponent = ...
+        vehicle.tireEnvelope.combinedForceExponent;
+    envelope.classification = 'numericalInitializationOnly';
+end
 end
 
 function initial = initialGuess(vehicle, tireModel, speed_mps, ...
